@@ -1,15 +1,14 @@
 defmodule DocumentoDistribuido.Treedoc.Operation do
   @moduledoc """
-  Formas iniciales de las operaciones del documento.
+  Operaciones de inserción y eliminación sobre identificadores ya asignados.
 
-  Estas estructuras no validan ni aplican operaciones. La identidad única de
-  operación y la información causal necesaria se definirán junto al algoritmo.
+  La asignación de PosID y el protocolo para transmitir operaciones están pendientes.
   """
 
   alias DocumentoDistribuido.Treedoc.PosID
 
   defmodule Insert do
-    @moduledoc "Inserción de contenido en una posición identificada."
+    @moduledoc "Inserta un átomo de texto en un PosID único."
     @enforce_keys [:position, :value]
     defstruct [:position, :value]
 
@@ -17,7 +16,7 @@ defmodule DocumentoDistribuido.Treedoc.Operation do
   end
 
   defmodule Delete do
-    @moduledoc "Eliminación del contenido de una posición identificada."
+    @moduledoc "Elimina el átomo identificado por un PosID."
     @enforce_keys [:position]
     defstruct [:position]
 

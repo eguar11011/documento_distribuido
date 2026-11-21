@@ -31,39 +31,81 @@ To start your Nerves app:
   * Elixir Discord #nerves channel: https://discord.gg/elixir
   * Source: https://github.com/nerves-project/nerves
 
-## Arquitectura propuesta del editor
+## Arquitectura del editor
 
-Esta primera etapa deja el proyecto como un esqueleto: aún no se pueden editar
-ni sincronizar documentos. El núcleo del CRDT será independiente de los
-procesos, la red y Nerves para poder probarlo en un host.
+El núcleo implementado es puro y se puede probar en el host. Permite generar
+posiciones y editar un documento local por átomos; todavía no existe un editor
+completo ni sincronización entre dispositivos.
 
-- `DocumentoDistribuido.Treedoc`: estado y reglas puras del documento. Por ahora
-  `new/0` solo crea un estado vacío; faltan inserción, eliminación y lectura.
-- `Treedoc.PosID`: identificador de una posición del árbol. Sus componentes son
-  provisionales: falta definir cómo se generan y ordenan, incluido el desempate
-  determinista de inserciones concurrentes y la identidad estable de cada réplica.
-- `Treedoc.Operation.Insert` y `Treedoc.Operation.Delete`: formas iniciales para
-  representar operaciones. Faltan la validación, identidad de operación y los
-  metadatos causales que necesite el algoritmo.
-- `Document`: futuro GenServer propietario del estado de un documento; serializará
-  solicitudes locales y la aplicación de operaciones recibidas.
-- `API`: futura interfaz local para consultar y editar documentos, delegando en
-  `Document` sin exponer los detalles de transporte.
-- `Discovery`: descubrirá pares en la red local. mDNS ya está disponible en la
-  configuración del dispositivo, pero aún no anuncia ni descubre el editor.
-- `Transport`: enviará y recibirá mensajes entre pares. El protocolo está por elegir.
-- `Sync`: reconciliará réplicas tras conexiones o desconexiones y solicitará la
-  información que falte, usando `Transport`.
-- `Persistence`: guardará y recuperará el estado y los metadatos necesarios. La
-  ubicación y el formato siguen pendientes.
+- `DocumentoDistribuido.Treedoc`: mantiene átomos y eliminaciones, genera
+  operaciones locales, aplica operaciones recibidas y devuelve el texto visible.
+- `Treedoc.PosID`: valida, compara y genera caminos en el árbol extendido. Cada
+  mininodo lleva un desambiguador UDIS `{contador, réplica}`, ordenado primero
+  por contador y luego por réplica. El componente `:root` representa el
+  mininodo de la raíz.
+- `Treedoc.Operation.Insert` y `Treedoc.Operation.Delete`: representan las
+  operaciones aplicadas por el núcleo.
+- `Document`: futuro GenServer propietario del estado de un documento.
+- `API`: futura interfaz local para consultar y editar documentos.
+- `Discovery`: descubrirá pares; la configuración mDNS existente aún no anuncia
+  ni descubre el editor.
+- `Transport`: enviará y recibirá mensajes entre pares; el protocolo está por elegir.
+- `Sync`: reconciliará réplicas y solicitará la información que falte.
+- `Persistence`: guardará y recuperará documentos y metadatos de réplica.
 
-Solo los tipos de datos y `Treedoc.new/0` tienen implementación en esta etapa;
-los demás módulos son límites documentados, no procesos ni servicios activos.
-Antes de implementar el CRDT se definirán y probarán sus reglas de orden,
-tratamiento de eliminaciones y operaciones fuera de orden, idempotencia y
-convergencia entre réplicas. También habrá que decidir cómo persistir la
-identidad y el contador de cada réplica, las marcas de borrado y la información
-necesaria para recuperar o sincronizar un documento.
+Los últimos seis módulos son límites documentados; no inician procesos ni
+servicios. La identidad única y el contador persistente de cada réplica siguen
+pendientes: hasta implementarlos, quien llama al núcleo debe aportar un par
+`{contador, réplica}` diferente en cada inserción, incluso tras reinicios y al
+editar otros documentos. Solo se detecta la reutilización que ya se haya
+observado en el documento actual. No se debe usar este núcleo como editor
+distribuido completo.
+
+### Ejemplo del núcleo
+
+```elixir
+alias DocumentoDistribuido.Treedoc
+
+doc = Treedoc.new()
+{:ok, doc, insertar_a} = Treedoc.insert(doc, 0, "A", {1, "replica-a"})
+{:ok, doc, insertar_b} = Treedoc.insert(doc, 1, "B", {2, "replica-a"})
+Treedoc.text(doc) # "AB"
+{:ok, doc, borrar_a} = Treedoc.delete(doc, 0)
+Treedoc.text(doc) # "B"
+
+# Las operaciones se pueden aplicar a otra copia del documento:
+{:ok, copia} = Treedoc.apply(Treedoc.new(), insertar_a)
+{:ok, copia} = Treedoc.apply(copia, insertar_b)
+{:ok, copia} = Treedoc.apply(copia, borrar_a)
+Treedoc.text(copia) # "B"
+```
+
+Cada inserción agrega un átomo, que puede ser una cadena de varios caracteres.
+Los índices de inserción y borrado cuentan átomos visibles, no bytes ni
+caracteres. Las funciones devuelven `{:ok, documento, operación}` o un error;
+los datos son inmutables, por lo que el llamador conserva el nuevo documento.
+
+`PosID.between/3` genera un descendiente de uno de los mininodos que delimitan
+el hueco. Esta estrategia simple respeta el orden implementado, pero no es una
+transcripción literal del algoritmo 1 del artículo. No equilibra el árbol: las
+rutas pueden crecer con las ediciones y las lecturas ordenan todos los átomos.
+
+El núcleo conserva marcas de borrado y valores asociados a PosID incluso tras
+un borrado: así una operación duplicada o recibida antes de su inserción no
+resucita contenido y se puede detectar una inserción conflictiva. Esto consume
+memoria y todavía no hay compactación ni recolección de marcas. Un mismo PosID
+con valores distintos produce `{:error, :position_conflict}`; la unicidad global
+depende de que el llamador no reutilice los desambiguadores.
+
+El diseño se basa en Preguiça et al., *A commutative replicated data type for
+cooperative editing* (2009), secciones 2 y 3. El artículo presupone entrega en
+orden causal; conservar marcas aun antes de recibir la inserción es una decisión
+adicional de esta implementación. Para comparar rutas se sigue el recorrido
+infijo y los ejemplos de las figuras 3 y 4: la regla impresa que compara un
+componente `0` con un mininodo no distingue el caso de un descendiente derecho
+del nodo mayor y, aplicada literalmente al ejemplo de la figura, parece ubicar
+Z antes de W. La prueba del ejemplo deja explícita esta interpretación, que debe
+revisarse si se adopta literalmente la generación de PosID del algoritmo 1.
 
 Nerves y las dependencias existentes aportan el sistema y las herramientas para
 firmware, supervisión OTP, configuración de interfaces mediante VintageNet,
@@ -85,5 +127,6 @@ instalados, se pueden ejecutar en Ubuntu sin compilar firmware:
 MIX_TARGET=host mix test
 ```
 
-Las pruebas actuales comprueban únicamente la construcción del estado vacío y
-las estructuras iniciales; todavía no prueban el comportamiento de un CRDT.
+Las pruebas cubren generación y orden de posiciones, edición local,
+inserciones concurrentes, convergencia, duplicados y borrados fuera de orden.
+La sincronización por red todavía no está implementada.
