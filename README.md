@@ -1,132 +1,143 @@
-# DocumentoDistribuido
+# Documento distribuido para Raspberry Pi
 
-**TODO: Add description**
+Editor compartido sin servidor central para la Raspberry Pi 4 y otros nodos de
+la misma red. La implementación activa utiliza el contrato del proyecto de
+referencia: Treedoc por operaciones, relojes vectoriales, descubrimiento por
+multicast y retransmisión del historial al reconectar. La interfaz de prueba es
+IEx por SSH. Cada nodo guarda su historial antes de aplicar y enviar cambios.
 
-## Targets
+El motor `CpdDoc` y sus pruebas se adaptaron de
+[Carlixgonzam/distribution-project-](https://github.com/Carlixgonzam/distribution-project-/tree/main/documento),
+commit `ad9d665352b0e60763ebc78743d180b30b617f2e`; el contrato de red se
+describe en su [PROTOCOL.md](https://github.com/Carlixgonzam/distribution-project-/blob/main/PROTOCOL.md).
+El repositorio de referencia consultado no incluye un archivo de licencia;
+verifica los permisos correspondientes antes de redistribuir este código.
 
-Nerves applications produce images for hardware targets based on the
-`MIX_TARGET` environment variable. If `MIX_TARGET` is unset, `mix` builds an
-image that runs on the host (e.g., your laptop). This is useful for executing
-logic tests, running utilities, and debugging. Other targets are represented by
-a short name like `rpi5` that maps to a Nerves system image for that platform.
-All of this logic is in the generated `mix.exs` and may be customized. For more
-information about targets see:
+El núcleo anterior `DocumentoDistribuido.Treedoc` se conserva con sus pruebas
+como implementación experimental independiente. Sus estructuras no son el
+formato de red del contrato y no alimentan el documento de `CpdDoc`.
 
-https://nerves.hexdocs.pm/supported-targets.html
+## Preparación
 
-## Getting Started
+Necesitas Elixir/Erlang y las herramientas de Nerves instaladas en el equipo
+que compila, una Raspberry Pi 4, una microSD y una red Wi-Fi WPA2 personal
+compartida por la Pi y el computador. Desactiva el aislamiento entre clientes
+del router. El firmware incorpora las claves públicas SSH de `~/.ssh` del
+equipo que lo compila; necesitas conservar la clave privada correspondiente.
 
-To start your Nerves app:
-  * `export MIX_TARGET=my_target` or prefix every command with
-    `MIX_TARGET=my_target`. For example, `MIX_TARGET=rpi5`
-  * Install dependencies with `mix deps.get`
-  * Create firmware with `mix firmware`
-  * Burn to an SD card with `mix burn`
+La versión de Nerves fijada actualmente para `rpi4` usa Erlang/OTP 29. Instala
+Erlang 29 y una versión compatible de Elixir, además de Hex y Nerves Bootstrap.
+Las pruebas de host también funcionan con Erlang/OTP 28.
 
-## Learn more
-
-  * Official docs: https://nerves.hexdocs.pm/getting-started.html
-  * Official website: https://nerves-project.org/
-  * Forum: https://elixirforum.com/c/nerves-forum
-  * Elixir Discord #nerves channel: https://discord.gg/elixir
-  * Source: https://github.com/nerves-project/nerves
-
-## Arquitectura del editor
-
-El núcleo implementado es puro y se puede probar en el host. Permite generar
-posiciones y editar un documento local por átomos; todavía no existe un editor
-completo ni sincronización entre dispositivos.
-
-- `DocumentoDistribuido.Treedoc`: mantiene átomos y eliminaciones, genera
-  operaciones locales, aplica operaciones recibidas y devuelve el texto visible.
-- `Treedoc.PosID`: valida, compara y genera caminos en el árbol extendido. Cada
-  mininodo lleva un desambiguador UDIS `{contador, réplica}`, ordenado primero
-  por contador y luego por réplica. El componente `:root` representa el
-  mininodo de la raíz.
-- `Treedoc.Operation.Insert` y `Treedoc.Operation.Delete`: representan las
-  operaciones aplicadas por el núcleo.
-- `Document`: futuro GenServer propietario del estado de un documento.
-- `API`: futura interfaz local para consultar y editar documentos.
-- `Discovery`: descubrirá pares; la configuración mDNS existente aún no anuncia
-  ni descubre el editor.
-- `Transport`: enviará y recibirá mensajes entre pares; el protocolo está por elegir.
-- `Sync`: reconciliará réplicas y solicitará la información que falte.
-- `Persistence`: guardará y recuperará documentos y metadatos de réplica.
-
-Los últimos seis módulos son límites documentados; no inician procesos ni
-servicios. La identidad única y el contador persistente de cada réplica siguen
-pendientes: hasta implementarlos, quien llama al núcleo debe aportar un par
-`{contador, réplica}` diferente en cada inserción, incluso tras reinicios y al
-editar otros documentos. Solo se detecta la reutilización que ya se haya
-observado en el documento actual. No se debe usar este núcleo como editor
-distribuido completo.
-
-### Ejemplo del núcleo
-
-```elixir
-alias DocumentoDistribuido.Treedoc
-
-doc = Treedoc.new()
-{:ok, doc, insertar_a} = Treedoc.insert(doc, 0, "A", {1, "replica-a"})
-{:ok, doc, insertar_b} = Treedoc.insert(doc, 1, "B", {2, "replica-a"})
-Treedoc.text(doc) # "AB"
-{:ok, doc, borrar_a} = Treedoc.delete(doc, 0)
-Treedoc.text(doc) # "B"
-
-# Las operaciones se pueden aplicar a otra copia del documento:
-{:ok, copia} = Treedoc.apply(Treedoc.new(), insertar_a)
-{:ok, copia} = Treedoc.apply(copia, insertar_b)
-{:ok, copia} = Treedoc.apply(copia, borrar_a)
-Treedoc.text(copia) # "B"
-```
-
-Cada inserción agrega un átomo, que puede ser una cadena de varios caracteres.
-Los índices de inserción y borrado cuentan átomos visibles, no bytes ni
-caracteres. Las funciones devuelven `{:ok, documento, operación}` o un error;
-los datos son inmutables, por lo que el llamador conserva el nuevo documento.
-
-`PosID.between/3` genera un descendiente de uno de los mininodos que delimitan
-el hueco. Esta estrategia simple respeta el orden implementado, pero no es una
-transcripción literal del algoritmo 1 del artículo. No equilibra el árbol: las
-rutas pueden crecer con las ediciones y las lecturas ordenan todos los átomos.
-
-El núcleo conserva marcas de borrado y valores asociados a PosID incluso tras
-un borrado: así una operación duplicada o recibida antes de su inserción no
-resucita contenido y se puede detectar una inserción conflictiva. Esto consume
-memoria y todavía no hay compactación ni recolección de marcas. Un mismo PosID
-con valores distintos produce `{:error, :position_conflict}`; la unicidad global
-depende de que el llamador no reutilice los desambiguadores.
-
-El diseño se basa en Preguiça et al., *A commutative replicated data type for
-cooperative editing* (2009), secciones 2 y 3. El artículo presupone entrega en
-orden causal; conservar marcas aun antes de recibir la inserción es una decisión
-adicional de esta implementación. Para comparar rutas se sigue el recorrido
-infijo y los ejemplos de las figuras 3 y 4: la regla impresa que compara un
-componente `0` con un mininodo no distingue el caso de un descendiente derecho
-del nodo mayor y, aplicada literalmente al ejemplo de la figura, parece ubicar
-Z antes de W. La prueba del ejemplo deja explícita esta interpretación, que debe
-revisarse si se adopta literalmente la generación de PosID del algoritmo 1.
-
-Nerves y las dependencias existentes aportan el sistema y las herramientas para
-firmware, supervisión OTP, configuración de interfaces mediante VintageNet,
-acceso SSH y anuncios mDNS. El proyecto debe implementar las reglas del editor,
-el descubrimiento específico de sus pares, el transporte, la sincronización y
-la persistencia. La distribución Erlang no se inicia automáticamente.
-
-La configuración actual activa `wlan0` con `VintageNetWiFi`, pero no configura
-el SSID Ewu ni sus credenciales. Su aprovisionamiento queda para una etapa
-posterior; no se deben incorporar credenciales al código fuente. Se conservan
-sin cambios la configuración de Nerves, SSH y red, así como el supervisor vacío.
-
-## Pruebas en el host
-
-Con Elixir, Erlang, el archivo bootstrap de Nerves y las dependencias del proyecto
-instalados, se pueden ejecutar en Ubuntu sin compilar firmware:
+Desde este directorio, ejecuta las pruebas locales:
 
 ```sh
+MIX_TARGET=host mix deps.get
 MIX_TARGET=host mix test
 ```
 
-Las pruebas cubren generación y orden de posiciones, edición local,
-inserciones concurrentes, convergencia, duplicados y borrados fuera de orden.
-La sincronización por red todavía no está implementada.
+Las pruebas distribuidas arrancan nodos Erlang locales y necesitan poder abrir
+sockets y ejecutar `epmd`.
+
+## Crear e instalar el firmware
+
+Abre una shell con las versiones compatibles, sustituye los valores por los de
+tu red y ejecuta en tu computador:
+
+```sh
+mise exec erlang@29.1.2 elixir@1.20.5-otp-29 -- zsh
+export MIX_TARGET=rpi4
+export HOTSPOT_SSID='nombre de tu red'
+export HOTSPOT_PSK='clave de tu red'
+# Opcional: segunda red, preferida cuando ambas están disponibles.
+export HOTSPOT_SSID_2='nombre de la segunda red'
+export HOTSPOT_PSK_2='clave de la segunda red'
+mix deps.get
+mix firmware
+mix burn
+exit
+```
+
+Para actualizar una Pi que ya usa Nerves y acepta tu clave SSH, ejecuta
+`mix upload <IP-de-la-Pi>` después de `mix firmware`, en lugar de `mix burn`.
+
+`mix burn` solicita seleccionar una unidad y sobrescribe la tarjeta elegida:
+revisa cuidadosamente que sea la microSD. Las credenciales quedan incluidas en
+el firmware; no compartas la imagen con personas que no deban conocerlas. Los
+archivos de firmware de prueba deben recompilarse con la red real antes de
+instalarlos. La configuración supone dominio regulatorio `CO`. `exit` vuelve
+a la shell anterior después de grabar.
+
+Inicia la Pi con la tarjeta, espera a que se conecte al Wi-Fi y entra desde el
+computador en la misma red:
+
+```sh
+ssh nerves-XXXX.local
+```
+
+Sustituye `XXXX` por el identificador de la Pi, o utiliza su IP asignada por el
+router. El nombre exacto se puede consultar en el router o en la consola serie.
+La Pi anuncia su nombre propio; no se usa `nerves.local`, que sería ambiguo con
+varias placas. SSH abre una consola IEx.
+
+## Probar una Pi y un computador
+
+En la consola IEx de la Pi:
+
+```elixir
+CpdDoc.estado()
+CpdDoc.insertar(0, "Hola desde la Raspberry")
+CpdDoc.texto()
+```
+
+En otra terminal del computador, averigua su IPv4 en esa misma red y arranca un
+segundo nodo con un nombre único; reemplaza `192.168.1.10` por tu IP real:
+
+```sh
+MIX_TARGET=host iex --name laptop@192.168.1.10 --cookie cpd2026 \
+  --erl '-kernel inet_dist_listen_min 4218 inet_dist_listen_max 4228 prevent_overlapping_partitions false' -S mix
+```
+
+En el IEx del computador, espera unos segundos y comprueba:
+
+```elixir
+CpdDoc.estado()   # :vecinos muestra los nodos conectados
+CpdDoc.texto()    # debe mostrar el texto insertado en la Pi
+CpdDoc.insertar(0, "PC: ")
+```
+
+En la Pi, `CpdDoc.texto()` debe mostrar `"PC: Hola desde la Raspberry"`.
+Para borrar, por ejemplo, los primeros cuatro grafemas: `CpdDoc.borrar(0, 4)`.
+Los índices cuentan grafemas visibles, empiezan en cero y `borrar/2` recibe
+índice y cantidad. `CpdDoc.insertar/2` devuelve `:ok` o un error.
+
+Si no aparecen vecinos, consulta `CpdDoc.estado().nodo` en un nodo y conéctalo
+manualmente desde el otro: `CpdDoc.conectar("nombre@192.168.1.23")`. Revisa
+las IP, el aislamiento del router, multicast y el firewall: TCP 4369 y
+4218–4228, UDP 45892. La cookie compartida `cpd2026` y la distribución Erlang
+son para una red de confianza; no expongas estos puertos a Internet.
+
+## Datos, reinicio y límites
+
+La Pi guarda el historial y una identidad de época en `/data/cpd_doc`; el host
+guarda por defecto en `datos/<nombre>.log` (se puede cambiar el directorio con
+`CPD_DOC_DATOS`). No borres el historial de un host y vuelvas a editar con el
+mismo nombre de nodo: usa otro nombre para evitar reutilizar números de
+operación. Al reinstalar una tarjeta se crea una época nueva. Si el historial
+se daña, se conserva el prefijo válido y se exige reiniciar con otra identidad
+cuando corresponda. Si falla la escritura, `estado().error_disco` informa el
+error y la réplica deja de aceptar operaciones hasta reiniciar y recuperar el
+almacenamiento.
+
+La Pi necesita obtener una IPv4 válida en `eth0` o `wlan0` al menos una vez por
+arranque antes de editar. Si ambas están disponibles usa Ethernet; al perder
+esa dirección usa Wi-Fi. Si cambia de interfaz o IP, la distribución se reinicia
+y los nodos vuelven a conectarse. Las configuraciones de red guardadas por
+VintageNet prevalecen sobre las incluidas como valores iniciales en el firmware.
+Tras desconectarse puede seguir editando bajo su última identidad y reconciliar
+al reconectar. Las marcas de borrado y el historial crecen sin
+compactación y se reenvía el historial completo al reconectar: adecuado para
+una demostración de pocos nodos, no para documentos grandes. Cambiar la IP
+cambia el nombre de nodo. Se verificaron la actualización y la sincronización
+entre una Pi 4 por Wi-Fi y un computador; Ethernet y otras placas requieren
+pruebas físicas.
