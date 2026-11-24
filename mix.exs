@@ -3,7 +3,20 @@ defmodule DocumentoDistribuido.MixProject do
 
   @app :documento_distribuido
   @version "0.1.0"
-  @all_targets [:bbb, :mangopi_mq_pro, :qemu_aarch64, :rpi, :rpi0, :rpi0_2, :rpi2, :rpi3, :rpi4, :rpi5, :trellis, :x86_64]
+  @all_targets [
+    :bbb,
+    :mangopi_mq_pro,
+    :qemu_aarch64,
+    :rpi,
+    :rpi0,
+    :rpi0_2,
+    :rpi2,
+    :rpi3,
+    :rpi4,
+    :rpi5,
+    :trellis,
+    :x86_64
+  ]
 
   def project do
     [
@@ -12,6 +25,7 @@ defmodule DocumentoDistribuido.MixProject do
       elixir: "~> 1.19",
       archives: [nerves_bootstrap: "~> 1.17"],
       listeners: listeners(Mix.target(), Mix.env()),
+      elixirc_paths: elixirc_paths(Mix.target(), Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       releases: [{@app, release()}]
@@ -35,7 +49,6 @@ defmodule DocumentoDistribuido.MixProject do
     [
       # Dependencies for all targets
       {:nerves, "~> 1.13", runtime: false},
-
       {:shoehorn, "~> 0.9.1"},
       {:logger_backends, "~> 1.0"},
       {:ring_logger, "~> 0.11.0"},
@@ -73,7 +86,7 @@ defmodule DocumentoDistribuido.MixProject do
       overwrite: true,
       # Erlang distribution is not started automatically.
       # See https://nerves-pack.hexdocs.pm/readme.html#erlang-distribution
-      cookie: "#{@app}_cookie",
+      cookie: "cpd2026",
       include_erts: &Nerves.Release.erts/0,
       steps: [&Nerves.Release.init/1, :assemble],
       strip_beams: Mix.env() == :prod or [keep: ["Docs"]]
@@ -83,4 +96,8 @@ defmodule DocumentoDistribuido.MixProject do
   # Uncomment the following line if using Phoenix > 1.8.
   # defp listeners(:host, :dev), do: [Phoenix.CodeReloader]
   defp listeners(_, _), do: []
+
+  defp elixirc_paths(:host, :test), do: ["lib", "test/support"]
+  defp elixirc_paths(:host, _), do: ["lib"]
+  defp elixirc_paths(_, _), do: ["lib", "lib_target"]
 end
