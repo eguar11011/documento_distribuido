@@ -50,8 +50,36 @@ config :nerves_ssh,
 # Update regulatory_domain to your 2-letter country code E.g., "US"
 #
 # See https://github.com/nerves-networking/vintage_net for more information
+hotspot_ssid = System.get_env("HOTSPOT_SSID")
+hotspot_psk = System.get_env("HOTSPOT_PSK")
+second_ssid = System.get_env("HOTSPOT_SSID_2")
+second_psk = System.get_env("HOTSPOT_PSK_2")
+
+if hotspot_ssid in [nil, ""] or hotspot_psk == nil or
+     byte_size(hotspot_psk) < 8 or byte_size(hotspot_psk) > 63 do
+  Mix.raise(
+    "Configura HOTSPOT_SSID y HOTSPOT_PSK (clave WPA2 de 8 a 63 bytes) antes de compilar el firmware"
+  )
+end
+
+if second_ssid in [nil, ""] != second_psk in [nil, ""] or
+     (second_psk not in [nil, ""] and (byte_size(second_psk) < 8 or byte_size(second_psk) > 63)) do
+  Mix.raise(
+    "Configura HOTSPOT_SSID_2 y HOTSPOT_PSK_2 juntos; la clave debe tener entre 8 y 63 bytes"
+  )
+end
+
+networks = [%{key_mgmt: :wpa_psk, ssid: hotspot_ssid, psk: hotspot_psk, priority: 1}]
+
+networks =
+  if second_ssid in [nil, ""] do
+    networks
+  else
+    networks ++ [%{key_mgmt: :wpa_psk, ssid: second_ssid, psk: second_psk, priority: 2}]
+  end
+
 config :vintage_net,
-  regulatory_domain: "00",
+  regulatory_domain: "CO",
   config: [
     {"usb0", %{type: VintageNetDirect}},
     {"eth0",
@@ -59,7 +87,14 @@ config :vintage_net,
        type: VintageNetEthernet,
        ipv4: %{method: :dhcp}
      }},
-    {"wlan0", %{type: VintageNetWiFi}}
+    {"wlan0",
+     %{
+       type: VintageNetWiFi,
+       vintage_net_wifi: %{
+         networks: networks
+       },
+       ipv4: %{method: :dhcp}
+     }}
   ]
 
 config :mdns_lite,
@@ -71,7 +106,7 @@ config :mdns_lite,
   # because otherwise any of the devices may respond to nerves.local leading to
   # unpredictable behavior.
 
-  hosts: [:hostname, "nerves"],
+  hosts: [:hostname],
   ttl: 120,
 
   # Advertise the following services over mDNS.
@@ -92,6 +127,10 @@ config :mdns_lite,
       port: 4369
     }
   ]
+
+config :documento_distribuido,
+  historial: "/data/cpd_doc/historial.log",
+  epoca: "/data/cpd_doc/epoca"
 
 # Import target specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

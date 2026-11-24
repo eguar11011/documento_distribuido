@@ -1,6 +1,4 @@
 defmodule DocumentoDistribuido.Application do
-  # See https://elixir.hexdocs.pm/Application.html
-  # for more information on OTP Applications
   @moduledoc false
 
   use Application
@@ -8,36 +6,19 @@ defmodule DocumentoDistribuido.Application do
   @impl true
   def start(_type, _args) do
     children =
-      [
-        # Children for all targets
-        # Starts a worker by calling: DocumentoDistribuido.Worker.start_link(arg)
-        # {DocumentoDistribuido.Worker, arg},
-      ] ++ target_children()
+      if Application.get_env(:documento_distribuido, :arrancar, true) do
+        [CpdDoc.Replica, CpdDoc.Descubrimiento] ++ target_children()
+      else
+        []
+      end
 
-    # See https://elixir.hexdocs.pm/Supervisor.html
-    # for other strategies and supported options
     opts = [strategy: :one_for_one, name: DocumentoDistribuido.Supervisor]
     Supervisor.start_link(children, opts)
   end
 
-  # List all child processes to be supervised
   if Mix.target() == :host do
-    defp target_children() do
-      [
-        # Children that only run on the host during development or test.
-        # In general, prefer using `config/host.exs` for differences.
-        #
-        # Starts a worker by calling: Host.Worker.start_link(arg)
-        # {Host.Worker, arg},
-      ]
-    end
+    defp target_children(), do: []
   else
-    defp target_children() do
-      [
-        # Children for all targets except host
-        # Starts a worker by calling: Target.Worker.start_link(arg)
-        # {Target.Worker, arg},
-      ]
-    end
+    defp target_children(), do: [CpdDoc.Red]
   end
 end
